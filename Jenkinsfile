@@ -188,16 +188,12 @@ kubectl get svc -n ${K8S_NAMESPACE}
     }
 
     post {
-        success {
-            echo "PIPELINE SUCCESS"
-        }
-
-        failure {
-            echo "PIPELINE FAILED"
-        }
-
-        always {
-            deleteDir()
+    always {
+        script {
+            if (currentBuild.rawBuild.getWorkspace() != null) {
+                deleteDir()
+            }
         }
     }
+}
 }
