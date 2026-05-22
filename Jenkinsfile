@@ -84,11 +84,9 @@ pipeline {
                     ARTIFACT=$(find build/libs -type f \\( -name "*.jar" -o -name "*.war" \\) | head -1)
 
                     if [ -z "$ARTIFACT" ]; then
-                        echo "❌ No artifact found"
+                        echo "No artifact found"
                         exit 1
                     fi
-
-                    echo "Artifact: $ARTIFACT"
 
                     curl -v -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
                     --upload-file "$ARTIFACT" \
@@ -97,7 +95,7 @@ pipeline {
             }
         }
 
-        stage('Docker Build') {
+        stage('Docker Build & Push') {
             steps {
                 sh '''
 cat > Dockerfile <<EOF
@@ -109,21 +107,16 @@ CMD ["catalina.sh","run"]
 EOF
 
 docker build -t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} .
+
 docker tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} ${DOCKER_IMAGE_NAME}:latest
-                '''
-            }
-        }
 
-        stage('Push DockerHub') {
-            steps {
-                sh '''
-echo "${DOCKERHUB_CREDS_PSW}" | docker login -u ${DOCKERHUB_CREDS_USR} --password-stdin
+# IMPORTANT: K8s registry image
+docker tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
+192.168.0.8:30082/${APP_NAME}:latest
 
-docker tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} ${DOCKERHUB_REPO}:${DOCKER_IMAGE_TAG}
-docker tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} ${DOCKERHUB_REPO}:latest
+echo "${NEXUS_CREDS_PSW}" | docker login -u ${NEXUS_CREDS_USR} --password-stdin 192.168.0.8:30082
 
-docker push ${DOCKERHUB_REPO}:${DOCKER_IMAGE_TAG}
-docker push ${DOCKERHUB_REPO}:latest
+docker push 192.168.0.8:30082/${APP_NAME}:latest
                 '''
             }
         }
@@ -190,9 +183,11 @@ kubectl get svc -n ${K8S_NAMESPACE}
         success {
             echo "PIPELINE SUCCESS"
         }
-
         failure {
             echo "PIPELINE FAILED"
         }
     }
 }
+
+
+
