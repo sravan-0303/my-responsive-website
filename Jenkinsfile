@@ -189,11 +189,7 @@ kubectl get svc -n ${K8S_NAMESPACE}
 
     post {
     always {
-        script {
-            if (currentBuild.rawBuild.getWorkspace() != null) {
-                deleteDir()
-            }
-        }
+        cleanWs()
     }
 }
 }
