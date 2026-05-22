@@ -2,35 +2,28 @@ pipeline {
     agent any
 
     environment {
-        // ============ GIT ============
         GIT_REPO = 'https://github.com/Krishnamohan-Yerrabilli/Java_Gradle_Responsive_Website.git'
         GIT_BRANCH = 'main'
 
-        // ============ APP ============
         APP_NAME = 'responsive-website'
         APP_VERSION = "${BUILD_NUMBER}"
 
-        // ============ SONAR ============
         SONAR_HOST_URL = 'http://192.168.0.8:30474'
         SONAR_LOGIN = credentials('sonarqube-token')
         SONARQUBE_PROJECT_KEY = 'responsive-website'
         SONARQUBE_PROJECT_NAME = 'Responsive Website'
 
-        // ============ NEXUS ============
         NEXUS_URL = 'http://192.168.0.8:30081'
         NEXUS_REPOSITORY = 'java-releases'
         NEXUS_DOCKER_REGISTRY = '192.168.0.8:30082'
         NEXUS_CREDS = credentials('nexus-creds')
 
-        // ============ DOCKER ============
         DOCKER_IMAGE_NAME = "${APP_NAME}"
         DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
 
-        // ============ DOCKERHUB ============
         DOCKERHUB_CREDS = credentials('dockerhub-creds')
         DOCKERHUB_REPO = "${DOCKERHUB_CREDS_USR}/${APP_NAME}"
 
-        // ============ K8S ============
         K8S_NAMESPACE = 'production'
     }
 
@@ -80,7 +73,7 @@ pipeline {
                     -Dsonar.projectName="${SONARQUBE_PROJECT_NAME}" \
                     -Dsonar.sources=src \
                     -Dsonar.host.url=${SONAR_HOST_URL} \
-                    -Dsonar.login=${SONAR_LOGIN} || true
+                    -Dsonar.login=${SONAR_LOGIN}
                 '''
             }
         }
@@ -88,7 +81,12 @@ pipeline {
         stage('Push to Nexus') {
             steps {
                 sh '''
-                    ARTIFACT=$(find build/libs -type f -name "*.jar" -o -name "*.war" | head -1)
+                    ARTIFACT=$(find build/libs -type f \\( -name "*.jar" -o -name "*.war" \\) | head -1)
+
+                    if [ -z "$ARTIFACT" ]; then
+                        echo "❌ No artifact found"
+                        exit 1
+                    fi
 
                     echo "Artifact: $ARTIFACT"
 
@@ -153,7 +151,8 @@ spec:
     spec:
       containers:
       - name: tomcat
-        image: ${DOCKER_IMAGE_NAME}:latest
+        image: 192.168.0.8:30082/responsive-website:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
 ---
@@ -188,8 +187,12 @@ kubectl get svc -n ${K8S_NAMESPACE}
     }
 
     post {
-    always {
-        cleanWs()
+        success {
+            echo "PIPELINE SUCCESS"
+        }
+
+        failure {
+            echo "PIPELINE FAILED"
+        }
     }
-}
 }
