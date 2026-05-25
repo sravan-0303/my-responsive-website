@@ -135,10 +135,10 @@ pipeline {
                 echo '========== DEPLOY TO K8S =========='
 
                 sh '''
+                    kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
                     kubectl apply -f kubernetes/deployment.yaml
                     kubectl apply -f kubernetes/service.yaml
-
-                    kubectl rollout status deployment/responsive-website
+                    kubectl rollout status deployment/responsive-website -n production --timeout=120s
                 '''
             }
         }
