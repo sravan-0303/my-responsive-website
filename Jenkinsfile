@@ -35,6 +35,7 @@ pipeline {
         stage('Pre-Check') {
             steps {
                 sh '''
+                    echo "=== Pre-Check Stage ==="
                     echo "Workspace: $WORKSPACE"
                     docker --version
                     kubectl version --client
@@ -45,18 +46,27 @@ pipeline {
 
         stage('Git Checkout') {
             steps {
-                checkout scm
+                echo "=== Git Checkout Stage ==="
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/sravan-0303/my-responsive-website.git',
+                        credentialsId: 'git-creds'
+                    ]]
+                ])
             }
         }
 
         stage('Build JAR') {
             steps {
+                echo "=== Build JAR Stage ==="
                 sh '''
                     echo "Building JAR file..."
                     chmod +x gradlew
                     ./gradlew clean build -x test
                     
-                    JAR_FILE=$(find build/libs -name "*.jar" | head -1)
+                    JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-plain.jar" | head -1)
                     if [ -z "$JAR_FILE" ]; then
                         echo "ERROR: No JAR file found in build/libs"
                         exit 1
@@ -70,6 +80,7 @@ pipeline {
 
         stage('SonarQube Scan') {
             steps {
+                echo "=== SonarQube Scan Stage ==="
                 sh '''
                     echo "Running SonarQube analysis..."
                     ./gradlew sonarqube \
@@ -84,23 +95,33 @@ pipeline {
 
         stage('Push to Nexus') {
             steps {
+                echo "=== Push to Nexus Stage ==="
                 sh '''
                     echo "Pushing artifact to Nexus..."
                     
-                    JAR_FILE=$(find build/libs -name "*.jar" | head -1)
+                    JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-plain.jar" | head -1)
+                    
+                    if [ -z "$JAR_FILE" ]; then
+                        echo "ERROR: No JAR file found"
+                        exit 1
+                    fi
+                    
                     ARTIFACT_NAME=$(basename "$JAR_FILE")
+                    
+                    echo "Uploading: $ARTIFACT_NAME to Nexus"
                     
                     curl -v -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
                         --upload-file "$JAR_FILE" \
                         "${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/${APP_NAME}/${APP_VERSION}/${ARTIFACT_NAME}"
                     
-                    echo "Artifact uploaded to Nexus"
+                    echo "Artifact uploaded to Nexus successfully"
                 '''
             }
         }
 
         stage('Docker Build & Push') {
             steps {
+                echo "=== Docker Build & Push Stage ==="
                 sh '''
                     echo "Building Docker image..."
                     
@@ -119,13 +140,14 @@ pipeline {
                     docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:${DOCKER_IMAGE_TAG}
                     docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
                     
-                    echo "Docker image pushed to Nexus"
+                    echo "Docker image pushed to Nexus successfully"
                 '''
             }
         }
 
         stage('Kubernetes Deploy') {
             steps {
+                echo "=== Kubernetes Deploy Stage ==="
                 sh '''
                     kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
                     
@@ -162,13 +184,13 @@ spec:
             cpu: "500m"
         livenessProbe:
           httpGet:
-            path: /
+            path: /actuator/health
             port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
-            path: /
+            path: /actuator/health
             port: 8080
           initialDelaySeconds: 10
           periodSeconds: 5
@@ -197,10 +219,13 @@ EOF
 
         stage('Verify Deployment') {
             steps {
+                echo "=== Verify Deployment Stage ==="
                 sh '''
                     echo "Deployment Status:"
                     kubectl get pods -n ${K8S_NAMESPACE}
                     kubectl get svc -n ${K8S_NAMESPACE}
+                    echo ""
+                    echo "Application URL: http://192.168.0.6:30080"
                 '''
             }
         }
@@ -208,13 +233,10 @@ EOF
 
     post {
         success {
-            echo "✓ Pipeline Success - Deployment Complete"
+            echo "✓ Pipeline SUCCESS - Application deployed at http://192.168.0.6:30080"
         }
         failure {
-            echo "✗ Pipeline Failed - Check logs"
-        }
-        always {
-            cleanWs()
+            echo "✗ Pipeline FAILED - Check logs above for errors"
         }
     }
 }
