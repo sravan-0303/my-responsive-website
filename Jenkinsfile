@@ -2,25 +2,20 @@ pipeline {
     agent any
 
     environment {
-        GIT_REPO = 'https://github.com/sravan-0303/my-responsive-website.git'
-        GIT_BRANCH = 'main'
-
         APP_NAME = 'responsive-website'
         APP_VERSION = "${BUILD_NUMBER}"
-
+        
         SONAR_HOST_URL = 'http://192.168.0.8:30474'
         SONAR_LOGIN = credentials('sonarqube-token')
         SONARQUBE_PROJECT_KEY = 'responsive-website'
         SONARQUBE_PROJECT_NAME = 'Responsive Website'
-
+        
         NEXUS_URL = 'http://192.168.0.8:30081'
         NEXUS_REPOSITORY = 'java-releases'
         NEXUS_CREDS = credentials('nexus-creds')
-
-        DOCKER_IMAGE_NAME = 'responsive-website'
-        DOCKER_IMAGE_TAG = "${BUILD_NUMBER}"
+        
         NEXUS_DOCKER_REPO = '192.168.0.8:30082'
-
+        
         K8S_NAMESPACE = 'production'
     }
 
@@ -31,127 +26,103 @@ pipeline {
     }
 
     stages {
-
-        stage('Pre-Check') {
+        stage('Checkout') {
             steps {
-                sh '''
-                    echo "=== Pre-Check Stage ==="
-                    echo "Workspace: $WORKSPACE"
-                    docker --version
-                    kubectl version --client
-                    git --version
-                '''
+                script {
+                    echo "========== Git Checkout =========="
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: 'https://github.com/sravan-0303/my-responsive-website.git',
+                            credentialsId: 'git-creds'
+                        ]]
+                    ])
+                }
             }
         }
 
-        stage('Git Checkout') {
+        stage('Build') {
             steps {
-                echo "=== Git Checkout Stage ==="
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/sravan-0303/my-responsive-website.git',
-                        credentialsId: 'git-creds'
-                    ]]
-                ])
+                script {
+                    echo "========== Building JAR =========="
+                    sh '''
+                        chmod +x gradlew
+                        ./gradlew clean build -x test
+                        echo "Build completed successfully"
+                        find build/libs -name "*.jar" -type f
+                    '''
+                }
             }
         }
 
-        stage('Build JAR') {
+        stage('SonarQube Analysis') {
             steps {
-                echo "=== Build JAR Stage ==="
-                sh '''
-                    echo "Building JAR file..."
-                    chmod +x gradlew
-                    ./gradlew clean build -x test
-                    
-                    JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-plain.jar" | head -1)
-                    if [ -z "$JAR_FILE" ]; then
-                        echo "ERROR: No JAR file found in build/libs"
-                        exit 1
-                    fi
-                    
-                    echo "JAR File Built: $JAR_FILE"
-                    ls -lh "$JAR_FILE"
-                '''
+                script {
+                    echo "========== SonarQube Scan =========="
+                    sh '''
+                        ./gradlew sonarqube \
+                            -Dsonar.projectKey=${SONARQUBE_PROJECT_KEY} \
+                            -Dsonar.projectName="${SONARQUBE_PROJECT_NAME}" \
+                            -Dsonar.sources=src \
+                            -Dsonar.host.url=${SONAR_HOST_URL} \
+                            -Dsonar.login=${SONAR_LOGIN}
+                    '''
+                }
             }
         }
 
-        stage('SonarQube Scan') {
+        stage('Publish to Nexus') {
             steps {
-                echo "=== SonarQube Scan Stage ==="
-                sh '''
-                    echo "Running SonarQube analysis..."
-                    ./gradlew sonarqube \
-                        -Dsonar.projectKey=${SONARQUBE_PROJECT_KEY} \
-                        -Dsonar.projectName="${SONARQUBE_PROJECT_NAME}" \
-                        -Dsonar.sources=src \
-                        -Dsonar.host.url=${SONAR_HOST_URL} \
-                        -Dsonar.login=${SONAR_LOGIN}
-                '''
+                script {
+                    echo "========== Upload to Nexus =========="
+                    sh '''
+                        JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-plain.jar" | head -1)
+                        
+                        if [ -z "$JAR_FILE" ]; then
+                            echo "ERROR: No JAR file found"
+                            exit 1
+                        fi
+                        
+                        ARTIFACT_NAME=$(basename "$JAR_FILE")
+                        echo "Uploading: $ARTIFACT_NAME"
+                        
+                        curl -v -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
+                            --upload-file "$JAR_FILE" \
+                            "${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/${APP_NAME}/${APP_VERSION}/${ARTIFACT_NAME}"
+                    '''
+                }
             }
         }
 
-        stage('Push to Nexus') {
+        stage('Build & Push Docker Image') {
             steps {
-                echo "=== Push to Nexus Stage ==="
-                sh '''
-                    echo "Pushing artifact to Nexus..."
-                    
-                    JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-plain.jar" | head -1)
-                    
-                    if [ -z "$JAR_FILE" ]; then
-                        echo "ERROR: No JAR file found"
-                        exit 1
-                    fi
-                    
-                    ARTIFACT_NAME=$(basename "$JAR_FILE")
-                    
-                    echo "Uploading: $ARTIFACT_NAME to Nexus"
-                    
-                    curl -v -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
-                        --upload-file "$JAR_FILE" \
-                        "${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/${APP_NAME}/${APP_VERSION}/${ARTIFACT_NAME}"
-                    
-                    echo "Artifact uploaded to Nexus successfully"
-                '''
+                script {
+                    echo "========== Docker Build & Push =========="
+                    sh '''
+                        docker build -t ${APP_NAME}:${APP_VERSION} .
+                        docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
+                        docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
+                        
+                        echo "${NEXUS_CREDS_PSW}" | docker login -u ${NEXUS_CREDS_USR} --password-stdin ${NEXUS_DOCKER_REPO}
+                        
+                        docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
+                        docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
+                        
+                        echo "Docker image pushed successfully"
+                    '''
+                }
             }
         }
 
-        stage('Docker Build & Push') {
+        stage('Deploy to Kubernetes') {
             steps {
-                echo "=== Docker Build & Push Stage ==="
-                sh '''
-                    echo "Building Docker image..."
-                    
-                    docker build -t ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} .
-                    docker tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} ${DOCKER_IMAGE_NAME}:latest
-                    
-                    # Tag for Nexus registry
-                    docker tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-                        ${NEXUS_DOCKER_REPO}/${APP_NAME}:${DOCKER_IMAGE_TAG}
-                    docker tag ${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-                        ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
-                    
-                    # Login and push
-                    echo "${NEXUS_CREDS_PSW}" | docker login -u ${NEXUS_CREDS_USR} --password-stdin ${NEXUS_DOCKER_REPO}
-                    
-                    docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:${DOCKER_IMAGE_TAG}
-                    docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
-                    
-                    echo "Docker image pushed to Nexus successfully"
-                '''
-            }
-        }
-
-        stage('Kubernetes Deploy') {
-            steps {
-                echo "=== Kubernetes Deploy Stage ==="
-                sh '''
-                    kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-                    
-                    cat > deployment.yaml <<'EOF'
+                script {
+                    echo "========== K8s Deployment =========="
+                    sh '''
+                        kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        cat > deployment.yaml <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -210,33 +181,44 @@ spec:
     targetPort: 8080
     nodePort: 30080
 EOF
-                    
-                    kubectl apply -f deployment.yaml
-                    kubectl rollout status deployment/responsive-website -n ${K8S_NAMESPACE} --timeout=5m
-                '''
+                        
+                        kubectl apply -f deployment.yaml
+                        kubectl rollout status deployment/responsive-website -n ${K8S_NAMESPACE} --timeout=5m
+                    '''
+                }
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                echo "=== Verify Deployment Stage ==="
-                sh '''
-                    echo "Deployment Status:"
-                    kubectl get pods -n ${K8S_NAMESPACE}
-                    kubectl get svc -n ${K8S_NAMESPACE}
-                    echo ""
-                    echo "Application URL: http://192.168.0.6:30080"
-                '''
+                script {
+                    echo "========== Deployment Status =========="
+                    sh '''
+                        echo "Pods:"
+                        kubectl get pods -n ${K8S_NAMESPACE}
+                        echo ""
+                        echo "Services:"
+                        kubectl get svc -n ${K8S_NAMESPACE}
+                        echo ""
+                        echo "Application accessible at: http://192.168.0.6:30080"
+                    '''
+                }
             }
         }
     }
 
     post {
         success {
-            echo "✓ Pipeline SUCCESS - Application deployed at http://192.168.0.6:30080"
+            script {
+                echo "✓ ========== PIPELINE SUCCESS =========="
+                echo "✓ Application deployed at: http://192.168.0.6:30080"
+            }
         }
         failure {
-            echo "✗ Pipeline FAILED - Check logs above for errors"
+            script {
+                echo "✗ ========== PIPELINE FAILED =========="
+                echo "✗ Check the logs above for error details"
+            }
         }
     }
 }
