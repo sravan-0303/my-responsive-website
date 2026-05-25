@@ -3,15 +3,17 @@ pipeline {
 
     environment {
         APP_NAME = 'responsive-website'
-        APP_VERSION = "${BUILD_NUMBER}"
+        APP_VERSION = "${env.BUILD_NUMBER}"
 
         SONAR_HOST_URL = 'http://192.168.0.8:30474'
-        SONAR_LOGIN = credentials('sonarqube-token')
+        SONAR_TOKEN = credentials('sonarqube-token')
+
         SONARQUBE_PROJECT_KEY = 'responsive-website'
         SONARQUBE_PROJECT_NAME = 'Responsive Website'
 
         NEXUS_URL = 'http://192.168.0.8:30081'
         NEXUS_REPOSITORY = 'java-releases'
+
         NEXUS_CREDS = credentials('nexus-creds')
 
         NEXUS_DOCKER_REPO = '192.168.0.8:30082'
@@ -29,13 +31,15 @@ pipeline {
 
         stage('Pre-Check') {
             steps {
+
                 echo "========== Environment Check =========="
 
                 sh '''
-                    echo "Current Directory: $(pwd)"
+                    echo "Current Directory:"
+                    pwd
 
                     echo ""
-                    echo "Workspace Contents:"
+                    echo "Workspace Files:"
                     ls -la
 
                     echo ""
@@ -52,61 +56,50 @@ pipeline {
 
                     echo ""
                     echo "Java Check:"
-                    java -version 2>&1 || echo "Java not found"
+                    java -version || echo "Java not installed"
 
                     echo ""
                     echo "Gradle Wrapper Check:"
-                    ls -l gradlew || echo "gradlew not found"
+                    ls -l gradlew || echo "gradlew missing"
                 '''
             }
         }
 
         stage('Build') {
             steps {
-                echo "========== Building Application =========="
+
+                echo "========== Build Stage =========="
 
                 sh '''
                     if [ ! -f gradlew ]; then
-                        echo "ERROR: gradlew file not found"
+                        echo "ERROR: gradlew not found"
                         exit 1
                     fi
 
                     chmod +x gradlew
 
-                    ./gradlew --version
-
-                    echo ""
-                    echo "Starting Gradle Build..."
-
-                    ./gradlew clean build -x test --info
+                    ./gradlew clean build -x test
                 '''
             }
         }
 
-        stage('Verify Build Output') {
+        stage('Verify Artifact') {
             steps {
-                echo "========== Verifying Build Output =========="
+
+                echo "========== Verify Artifact =========="
 
                 sh '''
-                    if [ ! -d build/libs ]; then
-                        echo "ERROR: build/libs directory not found"
-                        exit 1
-                    fi
-
-                    echo "Artifacts Found:"
+                    echo "Artifacts:"
                     ls -lh build/libs/
 
-                    JAR_FILE=$(find build/libs -name "*.jar" \
-                        -not -name "*-plain.jar" \
-                        -not -name "*-sources.jar" | head -1)
+                    JAR_FILE=$(find build/libs -name "*.jar" | head -1)
 
                     if [ -z "$JAR_FILE" ]; then
-                        echo "ERROR: No JAR artifact found"
+                        echo "ERROR: No JAR file generated"
                         exit 1
                     fi
 
-                    echo ""
-                    echo "Selected Artifact:"
+                    echo "Artifact Found:"
                     echo "$JAR_FILE"
                 '''
             }
@@ -114,6 +107,7 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
+
                 echo "========== SonarQube Analysis =========="
 
                 sh '''
@@ -124,84 +118,69 @@ pipeline {
                         -Dsonar.projectName="${SONARQUBE_PROJECT_NAME}" \
                         -Dsonar.sources=src \
                         -Dsonar.host.url=${SONAR_HOST_URL} \
-                        -Dsonar.login=${SONAR_LOGIN} \
-                    || echo "SonarQube analysis failed, continuing..."
+                        -Dsonar.login=${SONAR_TOKEN} \
+                    || echo "SonarQube analysis failed"
                 '''
             }
         }
 
-        stage('Publish to Nexus') {
+        stage('Upload to Nexus') {
             steps {
-                echo "========== Publishing Artifact to Nexus =========="
+
+                echo "========== Upload to Nexus =========="
 
                 sh '''
-                    JAR_FILE=$(find build/libs -name "*.jar" \
-                        -not -name "*-plain.jar" \
-                        -not -name "*-sources.jar" | head -1)
+                    JAR_FILE=$(find build/libs -name "*.jar" | head -1)
 
                     if [ -z "$JAR_FILE" ]; then
-                        echo "ERROR: No JAR file found"
+                        echo "ERROR: JAR file missing"
                         exit 1
                     fi
 
                     ARTIFACT_NAME=$(basename "$JAR_FILE")
 
-                    echo "Uploading Artifact:"
+                    echo "Uploading:"
                     echo "$ARTIFACT_NAME"
 
-                    curl -v -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
+                    curl -v \
+                        -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
                         --upload-file "$JAR_FILE" \
                         "${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/${APP_NAME}/${APP_VERSION}/${ARTIFACT_NAME}"
                 '''
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Docker Build & Push') {
             steps {
-                echo "========== Docker Build & Push =========="
+
+                echo "========== Docker Build =========="
 
                 sh '''
-                    echo "Building Docker Image..."
-
                     docker build -t ${APP_NAME}:${APP_VERSION} .
 
-                    echo ""
-                    echo "Tagging Image..."
+                    docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
 
-                    docker tag ${APP_NAME}:${APP_VERSION} \
-                        ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
-
-                    docker tag ${APP_NAME}:${APP_VERSION} \
-                        ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
-
-                    echo ""
-                    echo "Docker Login..."
+                    docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
 
                     echo "${NEXUS_CREDS_PSW}" | docker login \
                         -u ${NEXUS_CREDS_USR} \
                         --password-stdin \
                         ${NEXUS_DOCKER_REPO}
 
-                    echo ""
-                    echo "Pushing Images..."
-
                     docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
 
                     docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
-
-                    echo ""
-                    echo "Docker Push Successful"
                 '''
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
+
                 echo "========== Kubernetes Deployment =========="
 
-                sh '''
-                    kubectl create namespace ${K8S_NAMESPACE} \
-                        --dry-run=client -o yaml | kubectl apply -f -
+                sh """
+                    kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
 
                     cat > deployment.yaml <<EOF
 apiVersion: apps/v1
@@ -235,15 +214,6 @@ spec:
 
         ports:
         - containerPort: 8080
-
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service
@@ -265,24 +235,19 @@ spec:
     nodePort: 30080
 EOF
 
-                    echo ""
-                    echo "Applying Kubernetes Resources..."
-
                     kubectl apply -f deployment.yaml
-
-                    echo ""
-                    echo "Waiting for Rollout..."
 
                     kubectl rollout status deployment/responsive-website \
                         -n ${K8S_NAMESPACE} \
-                        --timeout=5m
-                '''
+                        --timeout=300s
+                """
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                echo "========== Deployment Verification =========="
+
+                echo "========== Verify Deployment =========="
 
                 sh '''
                     echo "Pods:"
@@ -295,10 +260,6 @@ EOF
                     echo ""
                     echo "Deployment:"
                     kubectl get deployment -n ${K8S_NAMESPACE}
-
-                    echo ""
-                    echo "Application URL:"
-                    echo "http://192.168.0.6:30080"
                 '''
             }
         }
@@ -308,16 +269,16 @@ EOF
 
         success {
             echo "========== PIPELINE SUCCESS =========="
-            echo "Application deployed successfully"
-            echo "URL: http://192.168.0.6:30080"
+            echo "Application URL: http://192.168.0.6:30080"
         }
 
         failure {
             echo "========== PIPELINE FAILED =========="
-            echo "Check console logs for exact error"
+            echo "Check Console Output for exact error"
         }
 
         always {
+
             echo "========== BUILD SUMMARY =========="
 
             sh '''
