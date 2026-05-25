@@ -10,7 +10,6 @@ pipeline {
 
         stage('Pre-Check') {
             steps {
-
                 echo '========== PRECHECK =========='
 
                 sh '''
@@ -34,12 +33,10 @@ pipeline {
 
         stage('Build') {
             steps {
-
                 echo '========== BUILD =========='
 
                 sh '''
                     chmod +x gradlew || true
-
                     ./gradlew clean build -x test
                 '''
             }
@@ -47,7 +44,6 @@ pipeline {
 
         stage('Verify Artifact') {
             steps {
-
                 echo '========== VERIFY ARTIFACT =========='
 
                 sh '''
@@ -63,21 +59,18 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
-
                 echo '========== SONARQUBE ANALYSIS =========='
 
                 sh '''
                     ./gradlew sonarqube \
                         -Dsonar.host.url=${SONAR_HOST_URL} \
-                        -Dsonar.login=${SONAR_TOKEN} \
-                    || true
+                        -Dsonar.login=${SONAR_TOKEN} || true
                 '''
             }
         }
 
         stage('Upload to Nexus') {
             steps {
-
                 echo '========== NEXUS UPLOAD =========='
 
                 withCredentials([usernamePassword(
@@ -102,9 +95,7 @@ pipeline {
         }
 
         stage('Docker Build') {
-
             steps {
-
                 echo '========== DOCKER BUILD =========='
 
                 sh '''
@@ -118,27 +109,23 @@ pipeline {
         }
 
         stage('Push Docker Image') {
-
             steps {
-
                 echo '========== DOCKER PUSH =========='
 
                 withCredentials([usernamePassword(
-                    credentialsId: 'nexus-creds',
-                    usernameVariable: 'NEXUS_USER',
-                    passwordVariable: 'NEXUS_PASS'
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
                 )]) {
 
                     sh '''
-                        docker tag responsive-website:1.0 \
-                        192.168.0.8:30082/responsive-website:1.0
+                        docker tag responsive-website:1.0 sravan0303/responsive-website:1.0
 
-                        echo "${NEXUS_PASS}" | docker login \
-                        -u "${NEXUS_USER}" \
-                        --password-stdin \
-                        192.168.0.8:30082
+                        echo "${DOCKER_PASS}" | docker login \
+                            -u "${DOCKER_USER}" \
+                            --password-stdin
 
-                        docker push 192.168.0.8:30082/responsive-website:1.0
+                        docker push sravan0303/responsive-website:1.0
                     '''
                 }
             }
@@ -146,7 +133,6 @@ pipeline {
     }
 
     post {
-
         success {
             echo '========== PIPELINE SUCCESS =========='
         }
@@ -156,7 +142,6 @@ pipeline {
         }
 
         always {
-
             echo '========== BUILD SUMMARY =========='
 
             sh '''
