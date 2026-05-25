@@ -74,6 +74,32 @@ pipeline {
                 '''
             }
         }
+
+        stage('Upload to Nexus') {
+            steps {
+
+                echo '========== NEXUS UPLOAD =========='
+
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus-creds',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+
+                    sh '''
+                        JAR_FILE=$(find build/libs -name "*.jar" | head -1)
+
+                        echo "Uploading:"
+                        echo "$JAR_FILE"
+
+                        curl -v \
+                            -u ${NEXUS_USER}:${NEXUS_PASS} \
+                            --upload-file "$JAR_FILE" \
+                            http://192.168.0.8:30081/repository/java-releases/responsive-website/1.0/responsive-website.jar
+                    '''
+                }
+            }
+        }
     }
 
     post {
