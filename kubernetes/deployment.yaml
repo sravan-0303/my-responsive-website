@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: responsive-website
+  namespace: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: responsive-website
+  template:
+    metadata:
+      labels:
+        app: responsive-website
+    spec:
+      containers:
+      - name: app
+        image: sravan0303/responsive-website:1.0
+        ports:
+        - containerPort: 8080
