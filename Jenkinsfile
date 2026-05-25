@@ -116,6 +116,33 @@ pipeline {
                 '''
             }
         }
+
+        stage('Push Docker Image') {
+
+            steps {
+
+                echo '========== DOCKER PUSH =========='
+
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus-creds',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+
+                    sh '''
+                        docker tag responsive-website:1.0 \
+                        192.168.0.8:30082/responsive-website:1.0
+
+                        echo "${NEXUS_PASS}" | docker login \
+                        -u "${NEXUS_USER}" \
+                        --password-stdin \
+                        192.168.0.8:30082
+
+                        docker push 192.168.0.8:30082/responsive-website:1.0
+                    '''
+                }
+            }
+        }
     }
 
     post {
