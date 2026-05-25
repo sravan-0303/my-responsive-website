@@ -100,22 +100,24 @@ pipeline {
                 }
             }
         }
-    }
+
         stage('Docker Build') {
 
-    steps {
+            steps {
 
-        echo '========== DOCKER BUILD =========='
+                echo '========== DOCKER BUILD =========='
 
-        sh '''
-            docker build -t responsive-website:1.0 .
+                sh '''
+                    docker build -t responsive-website:1.0 .
 
-            echo ""
-            echo "Docker Images:"
-            docker images
-        '''
+                    echo ""
+                    echo "Docker Images:"
+                    docker images
+                '''
+            }
+        }
     }
-}     
+
     post {
 
         success {
