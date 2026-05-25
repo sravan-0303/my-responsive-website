@@ -95,7 +95,7 @@ pipeline {
                         curl -v \
                             -u ${NEXUS_USER}:${NEXUS_PASS} \
                             --upload-file "$JAR_FILE" \
-                            http://192.168.0.8:30081/repository/maven-releases/responsive-website/1.0/responsive-website.jar
+                            http://192.168.0.8:30081/repository/maven-releases/com/example/responsive-website/1.0/responsive-website-1.0.jar
                     '''
                 }
             }
