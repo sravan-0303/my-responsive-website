@@ -102,7 +102,6 @@ pipeline {
                     docker build -t responsive-website:1.0 .
 
                     echo ""
-                    echo "Docker Images:"
                     docker images
                 '''
             }
@@ -128,6 +127,19 @@ pipeline {
                         docker push sravan0303/responsive-website:1.0
                     '''
                 }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                echo '========== DEPLOY TO K8S =========='
+
+                sh '''
+                    kubectl apply -f kubernetes/deployment.yaml
+                    kubectl apply -f kubernetes/service.yaml
+
+                    kubectl rollout status deployment/responsive-website
+                '''
             }
         }
     }
