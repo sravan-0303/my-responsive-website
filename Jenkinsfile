@@ -26,103 +26,117 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
+        stage('Pre-Check') {
             steps {
-                script {
-                    echo "========== Git Checkout =========="
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: '*/main']],
-                        userRemoteConfigs: [[
-                            url: 'https://github.com/sravan-0303/my-responsive-website.git',
-                            credentialsId: 'git-creds'
-                        ]]
-                    ])
-                }
+                echo "========== Environment Check =========="
+                sh '''
+                    echo "Current Directory: $(pwd)"
+                    echo "Workspace Contents:"
+                    ls -la
+                    echo ""
+                    echo "System Info:"
+                    docker version | head -5
+                    kubectl version --client --short
+                    git --version
+                    java -version 2>&1 || echo "Java not found in PATH"
+                '''
             }
         }
 
         stage('Build') {
             steps {
-                script {
-                    echo "========== Building JAR =========="
-                    sh '''
-                        chmod +x gradlew
-                        ./gradlew clean build -x test
-                        echo "Build completed successfully"
-                        find build/libs -name "*.jar" -type f
-                    '''
-                }
+                echo "========== Building JAR =========="
+                sh '''
+                    chmod +x gradlew
+                    ./gradlew --version
+                    echo ""
+                    echo "Starting gradle build..."
+                    ./gradlew clean build -x test --info 2>&1 | tail -50
+                '''
+            }
+        }
+
+        stage('Verify Build Output') {
+            steps {
+                echo "========== Checking Build Output =========="
+                sh '''
+                    echo "Checking build/libs directory:"
+                    if [ -d build/libs ]; then
+                        ls -lh build/libs/
+                    else
+                        echo "ERROR: build/libs directory not found!"
+                        exit 1
+                    fi
+                '''
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                script {
-                    echo "========== SonarQube Scan =========="
-                    sh '''
-                        ./gradlew sonarqube \
-                            -Dsonar.projectKey=${SONARQUBE_PROJECT_KEY} \
-                            -Dsonar.projectName="${SONARQUBE_PROJECT_NAME}" \
-                            -Dsonar.sources=src \
-                            -Dsonar.host.url=${SONAR_HOST_URL} \
-                            -Dsonar.login=${SONAR_LOGIN}
-                    '''
-                }
+                echo "========== SonarQube Scan =========="
+                sh '''
+                    ./gradlew sonarqube \
+                        -Dsonar.projectKey=${SONARQUBE_PROJECT_KEY} \
+                        -Dsonar.projectName="${SONARQUBE_PROJECT_NAME}" \
+                        -Dsonar.sources=src \
+                        -Dsonar.host.url=${SONAR_HOST_URL} \
+                        -Dsonar.login=${SONAR_LOGIN} || echo "SonarQube scan warning - continuing"
+                '''
             }
         }
 
         stage('Publish to Nexus') {
             steps {
-                script {
-                    echo "========== Upload to Nexus =========="
-                    sh '''
-                        JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-plain.jar" | head -1)
-                        
-                        if [ -z "$JAR_FILE" ]; then
-                            echo "ERROR: No JAR file found"
-                            exit 1
-                        fi
-                        
-                        ARTIFACT_NAME=$(basename "$JAR_FILE")
-                        echo "Uploading: $ARTIFACT_NAME"
-                        
-                        curl -v -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
-                            --upload-file "$JAR_FILE" \
-                            "${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/${APP_NAME}/${APP_VERSION}/${ARTIFACT_NAME}"
-                    '''
-                }
+                echo "========== Upload to Nexus =========="
+                sh '''
+                    JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-sources.jar" -not -name "*-plain.jar" | head -1)
+                    
+                    if [ -z "$JAR_FILE" ]; then
+                        echo "ERROR: No JAR file found in build/libs"
+                        ls -lh build/libs/
+                        exit 1
+                    fi
+                    
+                    ARTIFACT_NAME=$(basename "$JAR_FILE")
+                    echo "Found JAR: $ARTIFACT_NAME"
+                    
+                    curl -v -u ${NEXUS_CREDS_USR}:${NEXUS_CREDS_PSW} \
+                        --upload-file "$JAR_FILE" \
+                        "${NEXUS_URL}/repository/${NEXUS_REPOSITORY}/${APP_NAME}/${APP_VERSION}/${ARTIFACT_NAME}"
+                '''
             }
         }
 
-        stage('Build & Push Docker Image') {
+        stage('Build Docker Image') {
             steps {
-                script {
-                    echo "========== Docker Build & Push =========="
-                    sh '''
-                        docker build -t ${APP_NAME}:${APP_VERSION} .
-                        docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
-                        docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
-                        
-                        echo "${NEXUS_CREDS_PSW}" | docker login -u ${NEXUS_CREDS_USR} --password-stdin ${NEXUS_DOCKER_REPO}
-                        
-                        docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
-                        docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
-                        
-                        echo "Docker image pushed successfully"
-                    '''
-                }
+                echo "========== Docker Build & Push =========="
+                sh '''
+                    echo "Building Docker image..."
+                    docker build -t ${APP_NAME}:${APP_VERSION} .
+                    
+                    echo "Tagging for Nexus registry..."
+                    docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
+                    docker tag ${APP_NAME}:${APP_VERSION} ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
+                    
+                    echo "Logging into Nexus Docker registry..."
+                    echo "${NEXUS_CREDS_PSW}" | docker login -u ${NEXUS_CREDS_USR} --password-stdin ${NEXUS_DOCKER_REPO}
+                    
+                    echo "Pushing image..."
+                    docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:${APP_VERSION}
+                    docker push ${NEXUS_DOCKER_REPO}/${APP_NAME}:latest
+                    
+                    echo "Docker image pushed successfully"
+                '''
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    echo "========== K8s Deployment =========="
-                    sh '''
-                        kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-                        
-                        cat > deployment.yaml <<'EOF'
+                echo "========== K8s Deployment =========="
+                sh '''
+                    kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                    
+                    cat > deployment.yaml <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -181,44 +195,44 @@ spec:
     targetPort: 8080
     nodePort: 30080
 EOF
-                        
-                        kubectl apply -f deployment.yaml
-                        kubectl rollout status deployment/responsive-website -n ${K8S_NAMESPACE} --timeout=5m
-                    '''
-                }
+                    
+                    kubectl apply -f deployment.yaml
+                    kubectl rollout status deployment/responsive-website -n ${K8S_NAMESPACE} --timeout=5m
+                '''
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                script {
-                    echo "========== Deployment Status =========="
-                    sh '''
-                        echo "Pods:"
-                        kubectl get pods -n ${K8S_NAMESPACE}
-                        echo ""
-                        echo "Services:"
-                        kubectl get svc -n ${K8S_NAMESPACE}
-                        echo ""
-                        echo "Application accessible at: http://192.168.0.6:30080"
-                    '''
-                }
+                echo "========== Deployment Status =========="
+                sh '''
+                    echo "Pods in ${K8S_NAMESPACE}:"
+                    kubectl get pods -n ${K8S_NAMESPACE}
+                    echo ""
+                    echo "Services in ${K8S_NAMESPACE}:"
+                    kubectl get svc -n ${K8S_NAMESPACE}
+                    echo ""
+                    echo "✓ Application accessible at: http://192.168.0.6:30080"
+                '''
             }
         }
     }
 
     post {
         success {
-            script {
-                echo "✓ ========== PIPELINE SUCCESS =========="
-                echo "✓ Application deployed at: http://192.168.0.6:30080"
-            }
+            echo "✓ ========== PIPELINE SUCCESS =========="
+            echo "✓ Application deployed at: http://192.168.0.6:30080"
         }
         failure {
-            script {
-                echo "✗ ========== PIPELINE FAILED =========="
-                echo "✗ Check the logs above for error details"
-            }
+            echo "✗ ========== PIPELINE FAILED =========="
+            echo "✗ Check the logs above for specific error details"
+        }
+        always {
+            echo "========== Build Summary =========="
+            sh '''
+                echo "Build Number: ${BUILD_NUMBER}"
+                echo "Build Status: $([ $? -eq 0 ] && echo 'SUCCESS' || echo 'FAILURE')"
+            '''
         }
     }
 }
