@@ -1,40 +1,42 @@
 pipeline {
     agent any
 
+    environment {
+        SONAR_HOST_URL = 'http://192.168.0.8:30474'
+        SONAR_TOKEN = credentials('sonarqube-token')
+    }
+
     stages {
 
-        stage('Pre-Check') {
+        stage('Build') {
             steps {
-                echo 'PRECHECK'
 
                 sh '''
-                    pwd
-                    ls -la
-                    git --version
-                    java -version || true
+                    chmod +x gradlew
+                    ./gradlew clean build -x test
                 '''
             }
         }
 
-        stage('Build') {
+        stage('SonarQube Analysis') {
             steps {
-                echo 'BUILD STARTED'
 
                 sh '''
-                    chmod +x gradlew || true
-                    ./gradlew clean build -x test
+                    ./gradlew sonarqube \
+                    -Dsonar.host.url=${SONAR_HOST_URL} \
+                    -Dsonar.login=${SONAR_TOKEN} \
+                    || true
                 '''
             }
         }
 
         stage('Verify') {
             steps {
+
                 sh '''
-                    echo "Artifacts:"
                     ls -lh build/libs/
                 '''
             }
         }
     }
 }
-
